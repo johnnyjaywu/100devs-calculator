@@ -1,39 +1,51 @@
+// ====================================================================================================
+// HELPERS
+// ====================================================================================================
+hasWhitespace = (str) => /\s/g.test(str);
+
+isNumeric = (str) =>
+  str === 0 || (!hasWhitespace(str) && !isNaN(parseFloat(str)));
+
+// ====================================================================================================
+// HTML
+// ====================================================================================================
+
+// Cache html elements
+const inputField = document.querySelector("input");
+const h2 = document.querySelector("h2");
+
+// Add listeners to all buttons
 document
   .querySelectorAll("button")
   .forEach((button) => button.addEventListener("click", onButton));
 
-document.addEventListener("keydown", onKey);
+// Listen to key press
+document.addEventListener("keypress", onKey);
 
-const inputField = document.querySelector("input");
+// Listen to input
 inputField.addEventListener("input", onInput);
 
-const h2 = document.querySelector("h2");
-
+// Button event
 function onButton(event) {
   let button = event.target.id;
   inputField.value += button;
   inputField.dispatchEvent(new Event("input"));
-
-  if (button === "=") {
-    onEqualOrEnter();
-  }
 }
 
+// Key event
 function onKey(event) {
-  document.querySelector("input").focus();
   if (event.key === "Enter") {
-    onEqualOrEnter();
+    inputField.value += "=";
+    inputField.dispatchEvent(new Event("input"));
   }
 }
 
+// Input event
 function onInput(event) {
   event.target.value = calculator.processInput(event.target.value);
-  h2.innerHTML = !isNaN(calculator.result) ? calculator.result : "";
-}
-
-function onEqualOrEnter() {
-  h2.innerHTML = "";
-  inputField.value = calculator.evaluate();
+  h2.innerHTML = isNumeric(calculator.intermediate)
+    ? calculator.intermediate
+    : "";
 }
 
 // ====================================================================================================
@@ -42,30 +54,24 @@ function onEqualOrEnter() {
 let calculator = new Calculator();
 
 function Calculator() {
-  this.result;
-  this.entries = [];
+  //this.entries = [];
+  this.intermediate;
+  this.lastResult;
+
+  this.leftOperand;
+  this.lastOperator;
+  this.rightOperand;
 
   this.processInput = function (input) {
-    let filtered = filter(input);
-    console.log(this.entries);
-    this.result = _evaluate();
+    let filtered = filterInput(input);
     return filtered;
-  };
-
-  this.evaluate = function () {
-    let result = _evaluate();
-    
-    // TODO: handle consecutive evaluation
-
-    this.entries = [];
-    this.result = undefined;
-
-    return result;
   };
 
   this.reset = function () {
     this.entries = [];
-    this.result = undefined;
+    this.intermediate = undefined;
+    this.lastOperator = undefined;
+    this.rightOperand = undefined;
   };
 
   this.operators = {
@@ -91,103 +97,114 @@ function Calculator() {
     return Object.keys(this.operators).includes(op);
   };
 
-  _evaluate = () => {
-    let operator;
-    return this.entries.reduce((accumulator, currentValue) => {
-      // keep track of the last operator
-      if (isOperator(currentValue)) {
-        operator = currentValue;
+  // TODO: Handle processing intermediate with decimals as entry # > 1
+  // TODO: Handle negatives as the first input
+  // TODO: Handle floating point precision errors
+  filterInput = (input) => {
+    let entries = [];
+    
+    if (isNumeric(this.lastResult)) {
+      if (!input || !input.includes("=")) {
+        this.lastResult = undefined;
       }
-      // try to operate if there is an operator
+      else if (isNumeric(input.slice(-1)) || input.slice(-1) === '.') {
+        input = input.slice(-1);
+        this.lastResult = undefined;
+      }
+    }
+
+    [...input].forEach((char) => {
+      let lastEntry = entries.at(-1);
+
+      // if this is the first entry
+      if (!lastEntry) {
+        switch (true) {
+          case isNumeric(char):
+            entries.push(char);
+            break;
+          case char === ".":
+            entries.push("0.");
+            break;
+        }
+        this.leftOperand = parseFloat(char);
+      }
+      // rest of the entries
       else {
-        accumulator = operator
-          ? this.operators[operator](accumulator, parseFloat(currentValue))
-          : parseFloat(currentValue);
+        switch (true) {
+          case isNumeric(char):
+            // # or #.
+            if (isNumeric(lastEntry) || lastEntry === ".") {
+              entries[entries.length - 1] += char;
+
+              if (entries.length > 1) {
+                this.rightOperand = parseFloat(entries[entries.length - 1]);
+                
+                if (entries.length == 3)
+                  this.leftOperand = parseFloat(entries[0]);
+                processIntermediate();
+              }
+              else {
+                this.leftOperand = parseFloat(entries[entries.length - 1]);
+              }
+            }
+            // operator
+            else if (isOperator(lastEntry)) {
+              entries.push(char);
+              this.rightOperand = parseFloat(char);
+              processIntermediate();
+            }
+            break;
+          case char === ".":
+            // operator
+            if (isOperator(lastEntry)) {
+              entries.push("0.");
+              this.rightOperand = parseFloat(char);
+              processIntermediate();
+            }
+            // # but NOT #.
+            else if (isNumeric(lastEntry) && !lastEntry.includes(".")) {
+              entries[entries.length - 1] += char;
+            }
+            break;
+          case isOperator(char):
+            this.intermediate = undefined;
+            // operator
+            if (isOperator(lastEntry)) {
+              entries[entries.length - 1] = char;
+              this.lastOperator = char;
+            }
+            // # or #.
+            else if (isNumeric(lastEntry) || lastEntry === ".") {
+              entries.push(char);
+              this.lastOperator = char;
+            }
+            break;
+          case char === "=":
+            if (isNumeric(this.intermediate)) {
+              this.lastResult = this.intermediate;
+              this.intermediate = undefined;
+            } else if (isNumeric(this.lastResult)) {
+              processIntermediate();
+              this.lastResult = this.intermediate;
+              this.intermediate = undefined;
+            }
+            break;
+        }
       }
-      return accumulator;
-    }, 0);
+    });
+
+    return isNumeric(this.lastResult) ? this.lastResult : entries.join("");
   };
 
-  filter = (input) => {
-    
-    let lastChar = input.slice(-1);
-    let lastEntry = this.entries.at(-1);
-    
-    // if input length is less than entry (i.e. 'backspace' was pressed)
-    if (input.length < this.entries.join('').length) {
-      // if last entry is an operator, remove the last entry
-      if (isOperator(lastEntry)) {
-        this.entries.pop();
-      }
-      // if not, just remove the last character of the entry
-      else {
-        this.entries[this.entries.length - 1] = lastEntry.slice(0, -1);
-        if (this.entries.at(-1) === '') {
-          this.entries.pop();
-        }
-      }
-      return this.entries.join("");
+  processIntermediate = () => {
+    if (!isNumeric(this.leftOperand) || !this.lastOperator || !isNumeric(this.rightOperand))
+      this.intermediate = undefined;
+    else {
+      this.intermediate = this.operators[this.lastOperator](
+        this.leftOperand,
+        this.rightOperand
+      );
+      this.leftOperand = this.intermediate;
     }
-    
-    // check if the last character is an operator
-    if (isOperator(lastChar)) {
-      // check if current entries is not empty
-      if (this.entries.length > 0) {
-        // check if last entry is an operator
-        if (isOperator(lastEntry)) {
-          // replace it
-          this.entries[this.entries.length - 1] = lastChar;
-        }
-        // if not, add the operator as a new entry
-        else {
-          this.entries.push(lastChar);
-        }
-      }
-      else {
-        // check if the input has a number (i.e. after = has been pressed)
-        if (!isNaN(input.slice(0, -1))) {
-          this.entries.push(input.slice(0, -1));
-          this.entries.push(lastChar);
-        }
-      }
-    }
-    // check if it's a decimal
-    else if (lastChar === ".") {
-      // check if last current entry is empty or my last entry is an operator
-      if (this.entries.length == 0 || isOperator(lastEntry)) {
-        // add 0.
-        this.entries.push("0.");
-      }
-      // check if my last entry has NO decimal (i.e. this is the first decimal)
-      // *at this point, we know the last entry is a number
-      else if (!lastEntry.includes(".")) {
-        // add the decimal
-        this.entries[this.entries.length - 1] += lastChar;
-      }
-    }
-    // check if it's a number
-    else if (!isNaN(lastChar)) {
-      // if entries empty
-      if (this.entries.length == 0) {
-        this.entries.push(lastChar);
-      } else {
-        // check if last entry is an operator
-        if (isOperator(lastEntry)) {
-          // add new entry
-          this.entries.push(lastChar);
-        }
-        // otherwise, append to the last entry
-        else {
-          // if the last entry is a 0, replace it
-          if (lastEntry === '0') {
-            this.entries.splice(-1, lastChar);
-          } else {
-            this.entries[this.entries.length - 1] += lastChar;
-          }
-        }
-      }
-    }
-
-    return this.entries.join("");
   };
 }
